@@ -209,162 +209,169 @@ class DeleteOperation: ConcurrentOperation {
 
 /// A SaveOperation updates or adds a resource in a Spine.
 class SaveOperation: ConcurrentOperation {
-	/// The resource to save.
-	let resource: Resource
-	
-	/// The result of the operation. You can safely force unwrap this in the completionBlock.
-	var result: Failable<Void, SpineError>?
-	
-	/// Whether the resource is a new resource, or an existing resource.
-	fileprivate let isNewResource: Bool
-	
-	fileprivate let relationshipOperationQueue = OperationQueue()
-	
-	init(resource: Resource, spine: Spine) {
-		self.resource = resource
-		self.isNewResource = (resource.id == nil)
-		super.init()
-		self.spine = spine
-		self.relationshipOperationQueue.maxConcurrentOperationCount = 1
-		self.relationshipOperationQueue.addObserver(self, forKeyPath: "operations", context: nil)
-	}
-	
-	deinit {
-		self.relationshipOperationQueue.removeObserver(self, forKeyPath: "operations")
-	}
-	
-	override func execute() {
-		// First update relationships if this is an existing resource. Otherwise the local relationships
-		// are overwritten with data that is returned from saving the resource.
-		if isNewResource {
-			updateResource()
-		} else {
-			updateRelationships()
-		}
-	}
-
-	fileprivate func updateResource() {
-		let url: URL
-		let method: String
-		let options: SerializationOptions
-		
-		if isNewResource {
-			url = router.urlForResourceType(resource.resourceType)
-			method = "POST"
-			if let idGenerator = spine.idGenerator {
-				resource.id = idGenerator(resource)
-				options = [.IncludeToOne, .IncludeToMany, .IncludeID]
-			} else {
-				options = [.IncludeToOne, .IncludeToMany]
-			}
-		} else {
-			url = router.urlForQuery(Query(resource: resource))
-			method = "PATCH"
-			options = [.IncludeID]
-		}
-		
-		let payload: Data
-		
-		do {
-			payload = try serializer.serializeResources([resource], options: options)
-		} catch let error {
-			result = .failure(error.asSpineError)
-			state = .finished
-			return
-		}
-
-		Spine.logInfo(.spine, "Saving resource \(resource) using URL: \(url)")
-		
-		networkClient.request(method: method, url: url, payload: payload) { statusCode, responseData, networkError in
-			defer { self.state = .finished }
-			
-			if let error = networkError {
-				self.result = .failure(.networkError(error))
-				return
-			}
-			
-			let success = statusCodeIsSuccess(statusCode)
-			let document: JSONAPIDocument?
-			if let data = responseData , data.count > 0 {
-				do {
-					// Don't map onto the resources if the response is not in the success range.
-					let mappingTargets: [Resource]? = success ? [self.resource] : nil
-					document = try self.serializer.deserializeData(data, mappingTargets: mappingTargets)
-				} catch let error {
-					self.result = .failure(error.asSpineError)
-					return
-				}
-			} else {
-				document = nil
-			}
-			
-			if success {
-				self.result = .success()
-			} else {
-				self.result = .failure(.serverError(statusCode: statusCode!, apiErrors: document?.errors))
-			}
-		}
-	}
-	
-	/// Serializes `resource` into NSData using `options`. Any error that occurs is rethrown as a SpineError.
-	fileprivate func serializePayload(_ resource: Resource, options: SerializationOptions) throws -> Data {
-		do {
-			let payload = try serializer.serializeResources([resource], options: options)
-			return payload
-		} catch let error {
-			throw error.asSpineError
-		}
-	}
-
-	fileprivate func updateRelationships() {
-		let relationships = resource.fields.filter { field in
-			return field is Relationship && !field.isReadOnly
-		}
-		
-		guard !relationships.isEmpty else {
-			updateResource()
-			return
-		}
-		
-		let completionHandler: (_ result: Failable<Void, SpineError>?) -> Void = { result in
-			if let error = result?.error {
-				self.relationshipOperationQueue.cancelAllOperations()
-				self.result = .failure(error)
-				self.state = .finished
-			}
-		}
-		
-		for relationship in relationships {
-			switch relationship {
-			case let toOne as ToOneRelationship:
-				let operation = RelationshipReplaceOperation(resource: resource, relationship: toOne, spine: spine)
-				operation.completionBlock = { [unowned operation] in completionHandler(operation.result) }
-				relationshipOperationQueue.addOperation(operation)
-
-			case let toMany as ToManyRelationship:
-				let addOperation = RelationshipMutateOperation(resource: resource, relationship: toMany, mutation: .add, spine: spine)
-				addOperation.completionBlock = { [unowned addOperation] in completionHandler(addOperation.result) }
-				relationshipOperationQueue.addOperation(addOperation)
-				
-				let removeOperation = RelationshipMutateOperation(resource: resource, relationship: toMany, mutation: .remove, spine: spine)
-				removeOperation.completionBlock = { [unowned removeOperation] in completionHandler(removeOperation.result) }
-				relationshipOperationQueue.addOperation(removeOperation)
-			default: ()
-			}
-		}
-	}
-	
-	override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
-		guard let path = keyPath, let queue = object as? OperationQueue , path == "operations" && queue == relationshipOperationQueue else {
-			super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
-			return
-		}
-		
-		if queue.operationCount == 0 {
-			// At this point, we know all relationships are updated
-			updateResource()
-		}
-	}
+    /// The resource to save.
+    let resource: Resource
+    
+    /// The result of the operation. You can safely force unwrap this in the completionBlock.
+    var result: Failable<Void, SpineError>?
+    
+    /// Whether the resource is a new resource, or an existing resource.
+    fileprivate var isNewResource: Bool
+    
+    fileprivate let relationshipOperationQueue = OperationQueue()
+    
+    init(resource: Resource, spine: Spine) {
+        self.resource = resource
+        self.isNewResource = (resource.id == nil)
+        if(resource.resourceType == "actions"){
+            self.isNewResource = true
+        }
+        super.init()
+        self.spine = spine
+        self.relationshipOperationQueue.maxConcurrentOperationCount = 1
+        self.relationshipOperationQueue.addObserver(self, forKeyPath: "operations", options: NSKeyValueObservingOptions(), context: nil)
+    }
+    
+    deinit {
+        self.relationshipOperationQueue.removeObserver(self, forKeyPath: "operations")
+    }
+    
+    override func execute() {
+        // First update relationships if this is an existing resource. Otherwise the local relationships
+        // are overwritten with data that is returned from saving the resource.
+        if isNewResource {
+            updateResource()
+        } else {
+            updateResource()
+        }
+    }
+    
+    fileprivate func updateResource() {
+        let url: URL
+        let method: String
+        var options: SerializationOptions
+        
+        if isNewResource {
+            url = router.urlForResourceType(resource.resourceType)
+            method = "POST"
+            options = [.IncludeToOne,.OmitNullValues]
+        } else {
+            url = router.urlForQuery(Query(resource: resource))
+            method = "PATCH"
+            options = [.IncludeID,.OmitNullValues,.DirtyFieldsOnly]
+        }
+        
+        var payload: Data
+        
+        do {
+            if(resource.resourceType == "actions"){
+                options = [.IncludeID,.IncludeToOne,.OmitNullValues]
+                payload = try serializer.serializeResources([resource], options: options)
+            }else{
+                payload = try serializer.serializeResources([resource], options: options)
+            }
+            
+        } catch let error {
+            result = .failure(error as! SpineError)
+            state = .Finished
+            return
+        }
+        
+        Spine.logInfo(.spine, "Saving resource \(resource) using URL: \(url)")
+        
+        networkClient.request(method: method, url: url, payload: payload) { statusCode, responseData, networkError in
+            defer { self.state = .Finished }
+            
+            if let error = networkError {
+                self.result = Failable.failure(SpineError.networkError(error))
+                return
+            }
+            
+            let success = statusCodeIsSuccess(statusCode)
+            let document: JSONAPIDocument?
+            if let data = responseData , data.count > 0 {
+                do {
+                    // Don't map onto the resources if the response is not in the success range.
+                    let mappingTargets: [Resource]? = success ? [self.resource] : nil
+                    document = try self.serializer.deserializeData(data, mappingTargets: mappingTargets)
+                } catch let error {
+                    self.result = .failure(promoteToSpineError(error))
+                    return
+                }
+            } else {
+                document = nil
+            }
+            
+            if success {
+                self.result = .success()
+            } else {
+                let error = errorFromStatusCode(statusCode!, additionalErrors: document?.errors)
+                self.result = .failure(error)
+            }
+        }
+    }
+    
+    /// Serializes `resource` into NSData using `options`. Any error that occurs is rethrown as a SpineError.
+    fileprivate func serializePayload(_ resource: Resource, options: SerializationOptions) throws -> Data {
+        do {
+            let payload = try serializer.serializeResources([resource], options: options)
+            return payload
+        } catch let error {
+            throw promoteToSpineError(error)
+        }
+    }
+    
+    fileprivate func updateRelationships() {
+        let relationships = resource.fields.filter { field in
+            return field is Relationship && !field.isReadOnly
+        }
+        
+        guard !relationships.isEmpty else {
+            updateResource()
+            return
+        }
+        
+        let completionHandler: (_ result: Failable<Void, SpineError>?) -> Void = { result in
+            if let error = result?.error {
+                self.relationshipOperationQueue.cancelAllOperations()
+                self.result = Failable(error)
+                self.state = .Finished
+            }
+        }
+        
+        for relationship in relationships {
+            switch relationship {
+            case let toOne as ToOneRelationship:
+                let operation = RelationshipReplaceOperation(resource: resource, relationship: toOne, spine: spine)
+                operation.completionBlock = { [unowned operation] in completionHandler(operation.result) }
+                relationshipOperationQueue.addOperation(operation)
+                
+            case let toMany as ToManyRelationship:
+                if((resource.value(forField: toMany.name)) != nil){
+                    let addOperation = RelationshipMutateOperation(resource: resource, relationship: toMany, mutation: .add, spine: spine)
+                    addOperation.completionBlock = { [unowned addOperation] in completionHandler(addOperation.result) }
+                    relationshipOperationQueue.addOperation(addOperation)
+                    
+                    let removeOperation = RelationshipMutateOperation(resource: resource, relationship: toMany, mutation: .remove, spine: spine)
+                    removeOperation.completionBlock = { [unowned removeOperation] in completionHandler(removeOperation.result) }
+                    relationshipOperationQueue.addOperation(removeOperation)
+                }
+            default: ()
+            }
+        }
+    }
+    
+    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        guard let path = keyPath, let queue = object as? OperationQueue , path == "operations" && queue == relationshipOperationQueue else {
+            super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
+            return
+        }
+        
+        if queue.operationCount == 0 {
+            // At this point, we know all relationships are updated
+            updateResource()
+        }
+    }
 }
 
 private class RelationshipOperation: ConcurrentOperation {

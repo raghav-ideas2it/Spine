@@ -80,109 +80,109 @@ open class JSONAPIRouter: Router {
 		return URL(string: urlString, relativeTo: baseURL)!
 	}
 	
-	open func urlForQuery<T: Resource>(_ query: Query<T>) -> URL {
-		let url: URL
-		let preBuiltURL: Bool
-		
-		// Base URL
-		if let urlString = query.url?.absoluteString {
-			url = URL(string: urlString, relativeTo: baseURL)!
-			preBuiltURL = true
-		} else if let type = query.resourceType {
-			url = urlForResourceType(type)
-			preBuiltURL = false
-		} else {
-			preconditionFailure("Cannot build URL for query. Query does not have a URL, nor a resource type.")
-		}
-		
-		var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true)!
-		var queryItems: [URLQueryItem] = urlComponents.queryItems ?? []
-		
-		// Resource IDs
-		if !preBuiltURL {
-			if let ids = query.resourceIDs {
-				if ids.count == 1 {
-					urlComponents.path = (urlComponents.path as NSString).appendingPathComponent(ids.first!)
-				} else {
-					let item = URLQueryItem(name: "filter[id]", value: ids.joined(separator: ","))
-					appendQueryItem(item, to: &queryItems)
-				}
-			}
-		}
-		
-		// Includes
-		if !query.includes.isEmpty {
-			var resolvedIncludes = [String]()
-			
-			for include in query.includes {
-				var keys = [String]()
-				
-				var relatedResourceType: Resource.Type = T.self
-				for part in include.components(separatedBy: ".") {
-					if let relationship = relatedResourceType.field(named: part) as? Relationship {
-						keys.append(keyFormatter.format(relationship))
-						relatedResourceType = relationship.linkedType
-					}
-				}
-				
-				resolvedIncludes.append(keys.joined(separator: "."))
-			}
-			
-			let item = URLQueryItem(name: "include", value: resolvedIncludes.joined(separator: ","))
-			appendQueryItem(item, to: &queryItems)
-		}
-		
-		// Filters
-		for filter in query.filters {
-			let fieldName = filter.leftExpression.keyPath
-			var item: URLQueryItem?
-			if let field = T.field(named: fieldName) {
-				item = queryItemForFilter(on: keyFormatter.format(field), value: filter.rightExpression.constantValue, operatorType: filter.predicateOperatorType)
-			} else {
-				item = queryItemForFilter(on: fieldName, value: filter.rightExpression.constantValue, operatorType: filter.predicateOperatorType)
-			}
-			appendQueryItem(item!, to: &queryItems)
-		}
-		
-		// Fields
-		for (resourceType, fields) in query.fields {
-			let keys = fields.map { fieldName in
-				return keyFormatter.format(fieldName)
-			}
-			let item = URLQueryItem(name: "fields[\(resourceType)]", value: keys.joined(separator: ","))
-			appendQueryItem(item, to: &queryItems)
-		}
-		
-		// Sorting
-		if !query.sortDescriptors.isEmpty {
-			let descriptorStrings = query.sortDescriptors.map { descriptor -> String in
-				let field = T.field(named: descriptor.key!)
-				let key = self.keyFormatter.format(field!)
-				if descriptor.ascending {
-					return key
-				} else {
-					return "-\(key)"
-				}
-			}
-			
-			let item = URLQueryItem(name: "sort", value: descriptorStrings.joined(separator: ","))
-			appendQueryItem(item, to: &queryItems)
-		}
-		
-		// Pagination
-		if let pagination = query.pagination {
-			for item in queryItemsForPagination(pagination) {
-				appendQueryItem(item, to: &queryItems)
-			}
-		}
-
-		// Compose URL
-		if !queryItems.isEmpty {
-			urlComponents.queryItems = queryItems
-		}
-		
-		return urlComponents.url!
-	}
+    open func urlForQuery<T: Resource>(_ query: Query<T>) -> URL {
+        let url: URL
+        let preBuiltURL: Bool
+        
+        // Base URL
+        if let urlString = query.url?.absoluteString {
+            url = URL(string: urlString, relativeTo: baseURL)!
+            preBuiltURL = true
+        } else if let type = query.resourceType {
+            url = urlForResourceType(type)
+            preBuiltURL = false
+        } else {
+            preconditionFailure("Cannot build URL for query. Query does not have a URL, nor a resource type.")
+        }
+        
+        var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true)!
+        var queryItems: [URLQueryItem] = urlComponents.queryItems ?? []
+        
+        // Resource IDs
+        if !preBuiltURL {
+            if let ids = query.resourceIDs {
+                if ids.count == 1 {
+                    urlComponents.path = (urlComponents.path as NSString).appendingPathComponent(ids.first!)
+                } else {
+                    let item = URLQueryItem(name: "filter[id]", value: ids.joined(separator: ","))
+                    appendQueryItem(item, to: &queryItems)
+                }
+            }
+        }
+        
+        // Includes
+        if !query.includes.isEmpty {
+            var resolvedIncludes = [String]()
+            
+            for include in query.includes {
+                var keys = [String]()
+                
+                var relatedResourceType: Resource.Type = T.self
+                for part in include.components(separatedBy: ".") {
+                    if let relationship = relatedResourceType.field(named: part) as? Relationship {
+                        keys.append(keyFormatter.format(relationship))
+                        relatedResourceType = relationship.linkedType
+                    }
+                }
+                
+                resolvedIncludes.append(keys.joined(separator: "."))
+            }
+            
+            let item = URLQueryItem(name: "include", value: resolvedIncludes.joined(separator: ","))
+            appendQueryItem(item, to: &queryItems)
+        }
+        
+        // Filters
+        for filter in query.filters {
+            let fieldName = filter.leftExpression.keyPath
+            var item: URLQueryItem?
+            if let field = T.field(named: fieldName) {
+                item = queryItemForFilter(on: keyFormatter.format(field), value: filter.rightExpression.constantValue, operatorType: filter.predicateOperatorType)
+            } else {
+                item = queryItemForFilter(on: fieldName, value: filter.rightExpression.constantValue, operatorType: filter.predicateOperatorType)
+            }
+            appendQueryItem(item!, to: &queryItems)
+        }
+        
+        // Fields
+        for (resourceType, fields) in query.fields {
+            let keys = fields.map { fieldName in
+                return keyFormatter.format(T.field(named: fieldName)!)
+            }
+            let item = URLQueryItem(name: "fields[\(resourceType)]", value: keys.joined(separator: ","))
+            appendQueryItem(item, to: &queryItems)
+        }
+        
+        // Sorting
+        if !query.sortDescriptors.isEmpty {
+            let descriptorStrings = query.sortDescriptors.map { descriptor -> String in
+                //let field = descriptor.key;//T.field(named: descriptor.key!)
+                let key = descriptor.key; //self.keyFormatter.format(field!)
+                if descriptor.ascending {
+                    return key!
+                } else {
+                    return "-\(key!)"
+                }
+            }
+            
+            let item = URLQueryItem(name: "sort", value: descriptorStrings.joined(separator: ","))
+            appendQueryItem(item, to: &queryItems)
+        }
+        
+        // Pagination
+        if let pagination = query.pagination {
+            for item in queryItemsForPagination(pagination) {
+                appendQueryItem(item, to: &queryItems)
+            }
+        }
+        
+        // Compose URL
+        if !queryItems.isEmpty {
+            urlComponents.queryItems = queryItems
+        }
+        
+        return urlComponents.url!
+    }
 
 	/**
 	Returns an URLQueryItem that represents a filter in a URL.
@@ -196,18 +196,12 @@ open class JSONAPIRouter: Router {
 
 	- returns: A URLQueryItem representing the filter.
 	*/
-	open func queryItemForFilter(on key: String, value: Any?, operatorType: NSComparisonPredicate.Operator) -> URLQueryItem {
-		assert(operatorType == .equalTo, "The built in router only supports Query filter expressions of type 'equalTo'")
-		let stringValue: String
-		if let valueArray = value as? [Any] {
-			stringValue = valueArray.map { String(describing: $0) }.joined(separator: ",")
-		} else if let value = value {
-			stringValue = String(describing: value)
-		} else {
-			stringValue = "null"
-		}
-		return URLQueryItem(name: "filter[\(key)]", value: stringValue)
-	}
+    open func queryItemForFilter(on key: String, value: Any?, operatorType: NSComparisonPredicate.Operator) -> URLQueryItem {
+        assert(operatorType == .equalTo, "The built in router only supports Query filter expressions of type 'equalTo'")
+        let stringValue = value ?? "null"
+        return URLQueryItem(name: "filter[\(key)]", value: String(describing: stringValue))
+    }
+    
 
 	/**
 	Returns an array of URLQueryItems that represent the given pagination configuration.
